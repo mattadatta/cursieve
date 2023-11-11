@@ -1,0 +1,5 @@
+{
+    "rust-analyzer.linkedProjects": [
+        "./sieve_derive/Cargo.toml"
+    ]
+}
