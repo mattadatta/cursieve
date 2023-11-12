@@ -1,7 +1,10 @@
-use thiserror::Error
+use thiserror::Error;
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Error)]
 pub enum Error {
+    #[error("IoError")]
+    IoError(#[from] std::io::Error),
+    #[error("A Sieve error occurred: `{0}`")]
     Generic(String),
 }
 
