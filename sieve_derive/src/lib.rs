@@ -1,11 +1,8 @@
 extern crate proc_macro;
 
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
-use syn::{
-    parenthesized,
-    parse_macro_input,
-};
+use quote::quote;
+use syn::{parenthesized, parse_macro_input};
 
 #[proc_macro_derive(Sieve, attributes(sieve))]
 pub fn derive_sieve_type(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -36,7 +33,7 @@ fn derive_sieve_type2(input: &syn::DeriveInput) -> TokenStream {
 
     let generated_code = quote! {
         impl sieve::Sieve for #struct_name {
-            fn sift(data: &[u8], offset: u64) -> Result<Self, sieve::Error> where Self: Sized {
+            fn sift_cursor(cursor: &mut std::io::Cursor<&[u8]>, offset: u64) -> Result<Self, sieve::Error> where Self: Sized {
                 #fields_deserialization
             }
         }
@@ -79,7 +76,7 @@ fn derive_sieve_named_fields(struct_name: &syn::Ident, input: &syn::DeriveInput,
                         return quote!(compile_error!(format!("Unable to parse Option type: {}", #msg)));
                     },
                 }
-            }
+            },
             syn::Type::Path(type_path) if type_equals(&type_path, "Vec") => {
                 is_vec = true;
                 match extract_generic_type(type_path) {
@@ -90,10 +87,10 @@ fn derive_sieve_named_fields(struct_name: &syn::Ident, input: &syn::DeriveInput,
                         return quote!(compile_error!(format!("Unable to parse Vec type: {}", #msg)));
                     },
                 }
-            }
+            },
             syn::Type::Path(type_path) => {
                 type_path.path.segments.last().map(|s| &s.ident)
-            }
+            },
             _ => {
                 return quote! {
                     compile_error!(format!("Sieve: Invalid type: {#field.ty}"));
@@ -113,6 +110,7 @@ fn derive_sieve_named_fields(struct_name: &syn::Ident, input: &syn::DeriveInput,
                     let mut results = Vec::<#field_type>::with_capacity(#read_count);
                     for n in 0..#read_count {
                         let offset = #current_offset + offset + ((n as u64) * #read_length);
+                        // TODO: No need to do this if field_type is Sieve type
                         cursor.set_position(offset);
                         // TODO: I'd like optional types to return None on any failure
                         let result = #read_function.unwrap();
@@ -139,6 +137,7 @@ fn derive_sieve_named_fields(struct_name: &syn::Ident, input: &syn::DeriveInput,
                     let mut results = Vec::<#field_type>::with_capacity(#read_count);
                     for n in 0..#read_count {
                         let offset = #current_offset + offset + ((n as u64) * #read_length);
+                        // TODO: No need to do this if field_type is Sieve type
                         cursor.set_position(offset);
                         let result = #read_function?;
                         results.push(result);
@@ -182,7 +181,6 @@ fn derive_sieve_named_fields(struct_name: &syn::Ident, input: &syn::DeriveInput,
     };
 
     quote! {
-        let mut cursor = std::io::Cursor::new(data);
         Ok(#struct_name {
             #(#read_fns)*
         })
@@ -190,7 +188,14 @@ fn derive_sieve_named_fields(struct_name: &syn::Ident, input: &syn::DeriveInput,
 }
 
 fn derive_read_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttribute, field_type: &Option<&syn::Ident>) -> (u64, TokenStream) {
-    let field_type_str = field_type.map(|i| i.to_string()).unwrap_or("u8".to_owned());
+    let mut field_type_str = field_type.map(|i| i.to_string()).unwrap_or("u8".to_owned());
+    if let Some(try_from_type) = &sieve_attr.try_from {
+        if let Some(type_path) = try_from_type.as_type_path() {
+            field_type_str = type_path.path.segments.last().map(|s| s.ident.to_string()).unwrap_or("u8".to_owned())
+        } else {
+            return (0, quote!(compile_error!("try_from must be type.")))
+        }
+    }
     let read_length = match field_type_str.as_str() {
         "char" => 1, "bool" => 1,
         "u8" => 1, "i8" => 1,
@@ -202,7 +207,8 @@ fn derive_read_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAt
             if let Some(stride) = sieve_attr.stride {
                 stride
             } else {
-                return (0, quote!(compile_error!("Sieve type must be declared with `stride` attribute.")))
+                let error = format!("`{}` Sieve type must be declared with `stride` attribute.", field_type_str);
+                return (0, quote!(compile_error!(#error)))
             }
         }
     };
@@ -215,57 +221,69 @@ fn derive_read_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAt
     };
     let read_fn = match field_type_str.as_str() {
         "char" => quote! { 
-            byteorder::ReadBytesExt::read_u8(&mut cursor).map(|v| v as char)
+            byteorder::ReadBytesExt::read_u8(cursor).map(|v| v as char)
         },
         "bool" => quote! { 
-            byteorder::ReadBytesExt::read_u8(&mut cursor).map(|v| v != 0)
+            byteorder::ReadBytesExt::read_u8(cursor).map(|v| v != 0)
         },
         "u8" => quote! { 
-            byteorder::ReadBytesExt::read_u8(&mut cursor)
+            byteorder::ReadBytesExt::read_u8(cursor)
         },
         "i8" => quote! {
-            byteorder::ReadBytesExt::read_i8(&mut cursor)
+            byteorder::ReadBytesExt::read_i8(cursor)
         },
         "u16" => quote! { 
-            byteorder::ReadBytesExt::read_u16::<#byte_order>(&mut cursor)
+            byteorder::ReadBytesExt::read_u16::<#byte_order>(cursor)
         },
         "i16" => quote! {
-            byteorder::ReadBytesExt::read_i16::<#byte_order>(&mut cursor)
+            byteorder::ReadBytesExt::read_i16::<#byte_order>(cursor)
         },
         "u32" => quote! {
-            byteorder::ReadBytesExt::read_u32::<#byte_order>(&mut cursor)
+            byteorder::ReadBytesExt::read_u32::<#byte_order>(cursor)
         },
         "i32" => quote! {
-            byteorder::ReadBytesExt::read_i32::<#byte_order>(&mut cursor)
+            byteorder::ReadBytesExt::read_i32::<#byte_order>(cursor)
         },
         "u64" => quote! {
-            byteorder::ReadBytesExt::read_u64::<#byte_order>(&mut cursor)
+            byteorder::ReadBytesExt::read_u64::<#byte_order>(cursor)
         },
         "i64" => quote! {
-            byteorder::ReadBytesExt::read_i64::<#byte_order>(&mut cursor)
+            byteorder::ReadBytesExt::read_i64::<#byte_order>(cursor)
         },
         "f32" => quote! {
-            byteorder::ReadBytesExt::read_f32::<#byte_order>(&mut cursor)
+            byteorder::ReadBytesExt::read_f32::<#byte_order>(cursor)
         },
         "f64" => quote! {
-            byteorder::ReadBytesExt::read_f64::<#byte_order>(&mut cursor)
+            byteorder::ReadBytesExt::read_f64::<#byte_order>(cursor)
         },
         _ => {
-            // if let Some(t) = syn::parse_str::<syn::Type>(field_type).ok() {
-            //     quote! {
-            //         <#t as sieve::Sieve>::sift(data, #current_offset + offset)
-            //     }
-            // } else {
-            //     quote! {
-            //         compile_error!("Sieve: Unsupported type");
-            //     }
-            // }
             quote! {
-                <#field_type as sieve::Sieve>::sift(data, offset)
+                <#field_type as sieve::Sieve>::sift_cursor(cursor, offset)
             }
         }
     };
+    let read_fn = if let Some(try_from_type) = &sieve_attr.try_from {
+        quote! {
+            #read_fn.and_then(|v| <#field_type as std::convert::TryFrom<#try_from_type>>::try_from(v).map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, sieve::Error::TryFromError(format!("Failed to try_from {}", #field_type_str)))))
+        }
+    } else {
+        read_fn
+    };
     (read_length, read_fn)
+}
+
+trait TypeExt {
+    fn as_type_path(&self) -> Option<&syn::TypePath>;
+}
+
+impl TypeExt for syn::Type {
+    fn as_type_path(&self) -> Option<&syn::TypePath> {
+        if let syn::Type::Path(path) = self {
+            Some(path)
+        } else {
+            None
+        }
+    }
 }
 
 fn extract_generic_type(type_path: &syn::TypePath) -> Result<&syn::TypePath, String> {
@@ -293,12 +311,13 @@ fn type_equals(type_path: &syn::TypePath, t: &str) -> bool {
     type_path.path.segments.last().map_or(false, |segment| segment.ident == t)
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct SieveAttribute {
     offset: Option<u64>,
     stride: Option<u64>,
     count: Option<usize>,
     default: Option<bool>,
+    try_from: Option<syn::Type>,
     order: Option<syn::Type>,
 }
 
@@ -316,6 +335,7 @@ fn parse_sieve_attr(attr: &syn::Attribute) -> SieveAttribute {
     let mut sieve_stride: Option<u64> = None;
     let mut sieve_count: Option<usize> = None;
     let mut sieve_default: Option<bool> = None;
+    let mut sieve_try_from: Option<syn::Type> = None;
     let mut sieve_order: Option<syn::Type> = None;
     let _ = attr.parse_nested_meta(|meta| {
         if let Some(i) = meta.path.get_ident() {
@@ -332,6 +352,9 @@ fn parse_sieve_attr(attr: &syn::Attribute) -> SieveAttribute {
                 "default" => {
                     sieve_default = parse_attr_param::<BoolAttr>(&meta).map(|a| a.content).or(Some(true))
                 }
+                "try_from" => {
+                    sieve_try_from = parse_attr_param::<TypeAttr>(&meta).map(|a| a.content).or(Some(syn::parse_str::<syn::Type>("u8").unwrap()))
+                }
                 "order" => {
                     sieve_order = parse_attr_param::<TypeAttr>(&meta).map(|a| a.content)
                 }
@@ -347,6 +370,7 @@ fn parse_sieve_attr(attr: &syn::Attribute) -> SieveAttribute {
         stride: sieve_stride,
         count: sieve_count,
         default: sieve_default,
+        try_from: sieve_try_from,
         order: sieve_order,
     }
 }
@@ -389,16 +413,16 @@ impl syn::parse::Parse for TypeAttr {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let content;
         parenthesized!(content in input);
-        let lit: syn::Lit = content.parse()?;
+        let t: syn::Type = content.parse()?;
         Ok(TypeAttr {
-            content: syn::parse_str::<syn::Type>(&lit.into_token_stream().to_string())?,
+            content: t,
         })
     }
 }
 
 fn parse_attr_param<T>(meta: &syn::meta::ParseNestedMeta) -> Option<T> where T: syn::parse::Parse {
     if meta.input.peek(syn::token::Paren) {
-        <T as syn::parse::Parse>::parse(&meta.input).ok()
+        T::parse(&meta.input).ok()
     } else {
         None
     }
