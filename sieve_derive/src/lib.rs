@@ -11,12 +11,10 @@ pub fn derive_sieve_type(input: proc_macro::TokenStream) -> proc_macro::TokenStr
 }
 
 fn derive_sieve_type2(input: &syn::DeriveInput) -> TokenStream {
-    let struct_name = &input.ident;
-
-    let fields_deserialization = match &input.data {
+    match &input.data {
         syn::Data::Struct(data_struct) => match &data_struct.fields {
             syn::Fields::Named(named_fields) => {
-                derive_sieve_named_fields(struct_name, &input, named_fields)
+                derive_sieve_impl(input, named_fields)
             }
             _ => {
                 return quote! {
@@ -29,93 +27,48 @@ fn derive_sieve_type2(input: &syn::DeriveInput) -> TokenStream {
                 compile_error!("Sieve can only be used with structs.");
             }
         }
-    };
+    }
+}
 
+fn derive_sieve_impl(input: &syn::DeriveInput, named_fields: &syn::FieldsNamed) -> TokenStream {
+    let struct_name = &input.ident;
+    let sift_cursor_at = derive_sieve_sift_cursor_at(input, named_fields);
+    let disperse_cursor_at = derive_sieve_disperse_cursor_at(input, named_fields);
     let generated_code = quote! {
-        impl sieve::Sieve for #struct_name {
-            fn sift_cursor(cursor: &mut std::io::Cursor<&[u8]>, offset: u64) -> Result<Self, sieve::Error> where Self: Sized {
-                #fields_deserialization
+        impl sieve::SieveSift for #struct_name {
+            fn sift_cursor_at(cursor: &mut std::io::Cursor<&[u8]>, offset: u64) -> Result<Self, sieve::Error> where Self: Sized {
+                #sift_cursor_at
             }
         }
+        impl sieve::SieveDisperse for #struct_name {
+            fn disperse_cursor_at(&self, cursor: &mut std::io::Cursor<&mut [u8]>, offset: u64) -> Result<(), sieve::Error> {
+                #disperse_cursor_at
+            }
+        }
+        impl sieve::Sieve for #struct_name {
+        }
     };
-
-    println!("Generated code:\n{}", generated_code.to_string());
-
     generated_code
 }
 
-fn derive_sieve_named_fields(struct_name: &syn::Ident, input: &syn::DeriveInput, named_fields: &syn::FieldsNamed) -> TokenStream {
+fn derive_sieve_sift_cursor_at(input: &syn::DeriveInput, named_fields: &syn::FieldsNamed) -> TokenStream {
+    let struct_name = &input.ident;
     let global_sieve_attr = get_sieve_attr(&input.attrs).unwrap_or_default();
     let global_offset = global_sieve_attr.offset.unwrap_or(0);
     let mut current_offset: u64 = global_offset;
     let mut read_fns = Vec::<TokenStream>::with_capacity(named_fields.named.len());
     for field in named_fields.named.iter() {
         let sieve_attr = get_sieve_attr(&field.attrs).unwrap_or_default();
-        let mut is_option = false;
-        let mut is_vec = false;
-        let mut is_vec_option = false;
-        let field_type = match &field.ty {
-            syn::Type::Path(type_path) if type_equals(&type_path, "Option") => {
-                is_option = true;
-                match extract_generic_type(type_path) {
-                    Ok(type_path) => {
-                        if type_equals(&type_path, "Vec") {
-                            is_vec = true;
-                            match extract_generic_type(type_path) {
-                                Ok(type_path) => {
-                                    type_path.path.segments.last().map(|s| &s.ident)
-                                },
-                                Err(msg) => {
-                                    return quote!(compile_error!(format!("Unable to parse Vec type: {}", #msg)));
-                                },
-                            }
-                        } else {
-                            type_path.path.segments.last().map(|s| &s.ident)
-                        }
-                    },
-                    Err(msg) => {
-                        return quote!(compile_error!(format!("Unable to parse Option type: {}", #msg)));
-                    },
-                }
-            },
-            syn::Type::Path(type_path) if type_equals(&type_path, "Vec") => {
-                is_vec = true;
-                match extract_generic_type(type_path) {
-                    Ok(type_path) => {
-                        if type_equals(&type_path, "Option") {
-                            is_vec_option = true;
-                            match extract_generic_type(type_path) {
-                                Ok(type_path) => {
-                                    type_path.path.segments.last().map(|s| &s.ident)
-                                },
-                                Err(msg) => {
-                                    return quote!(compile_error!(format!("Unable to parse Vec type: {}", #msg)));
-                                },
-                            }
-                        } else {
-                            type_path.path.segments.last().map(|s| &s.ident)
-                        }
-                    },
-                    Err(msg) => {
-                        return quote!(compile_error!(format!("Unable to parse Vec type: {}", #msg)));
-                    },
-                }
-            },
-            syn::Type::Path(type_path) => {
-                type_path.path.segments.last().map(|s| &s.ident)
-            },
-            _ => {
-                return quote! {
-                    compile_error!(format!("Sieve: Invalid type: {#field.ty}"));
-                };
-            }
+        let (field_type, is_option, is_vec, is_vec_option) = match derive_field_props(field) {
+            Ok(args) => args,
+            Err(s) => return s,
         };
 
         if let Some(attr_offset) = &sieve_attr.offset {
             current_offset = global_offset + attr_offset
         }
 
-        let (read_length, read_preamble, read_function) = derive_read_function(&global_sieve_attr, &sieve_attr, &field_type);
+        let (read_length, read_preamble, read_function) = derive_op_function(&global_sieve_attr, &sieve_attr, &field_type, false);
         let read_count = sieve_attr.count.unwrap_or(1);
         let read_code = if is_option {
             if is_vec {
@@ -232,7 +185,128 @@ fn derive_sieve_named_fields(struct_name: &syn::Ident, input: &syn::DeriveInput,
     }
 }
 
-fn derive_read_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttribute, field_type: &Option<&syn::Ident>) -> (u64, TokenStream, TokenStream) {
+fn derive_sieve_disperse_cursor_at(input: &syn::DeriveInput, named_fields: &syn::FieldsNamed) -> TokenStream {
+    let struct_name = &input.ident;
+    let global_sieve_attr = get_sieve_attr(&input.attrs).unwrap_or_default();
+    let global_offset = global_sieve_attr.offset.unwrap_or(0);
+    let mut current_offset: u64 = global_offset;
+    let mut write_fns = Vec::<TokenStream>::with_capacity(named_fields.named.len());
+    for field in named_fields.named.iter() {
+        let sieve_attr = get_sieve_attr(&field.attrs).unwrap_or_default();
+        let (field_type, is_option, is_vec, is_vec_option) = match derive_field_props(field) {
+            Ok(args) => args,
+            Err(s) => return s,
+        };
+
+        if let Some(attr_offset) = &sieve_attr.offset {
+            current_offset = global_offset + attr_offset
+        }
+
+        let (write_length, write_preamble, write_function) = derive_op_function(&global_sieve_attr, &sieve_attr, &field_type, true);
+        let write_count = sieve_attr.count.unwrap_or(1);
+        let write_code = if is_option {
+            if is_vec {
+                let write_code = if is_vec_option {
+                    quote! {
+                        if let Some(values) = value {
+                            for n in 0..#write_count {
+                                if let Some(value) = values.get(n).flatten() {
+                                    if let Some(value) = value {
+                                        let offset = #current_offset + offset + ((n as u64) * #write_length);
+                                        #write_preamble
+                                        #write_function?;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    quote! {
+                        if let Some(values) = value {
+                            for n in 0..#write_count {
+                                if let Some(value) = values.get(n) {
+                                    let offset = #current_offset + offset + ((n as u64) * #write_length);
+                                    #write_preamble
+                                    #write_function?;
+                                }
+                            }
+                        }
+                    }
+                };
+                current_offset += write_length * (write_count as u64);
+                write_code
+            } else {
+                let full_write = quote! {
+                    if let Some(value) = value {
+                        let offset = #current_offset + offset;
+                        #write_preamble
+                        #write_function?;
+                    }
+                };
+
+                current_offset += write_length;
+
+                full_write
+            }
+        } else {
+            if is_vec {
+                let write_code = if is_vec_option {
+                    quote! {
+                        let values = value;
+                        for n in 0..#write_count {
+                            if let Some(value) = values.get(n) {
+                                if let Some(value) = value {
+                                    let offset = #current_offset + offset + ((n as u64) * #write_length);
+                                    #write_preamble
+                                    #write_function?;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    quote! {
+                        let values = value;
+                        for n in 0..#write_count {
+                            if let Some(value) = values.get(n) {
+                                let offset = #current_offset + offset + ((n as u64) * #write_length);
+                                #write_preamble
+                                #write_function?;
+                            }
+                        }
+                    }
+                };
+                current_offset += write_length * (write_count as u64);
+                write_code
+            } else {
+                let full_write = quote! {
+                    let offset = #current_offset + offset;
+                    #write_preamble
+                    #write_function?;
+                };
+
+                current_offset += write_length;
+
+                full_write
+            }
+        };
+
+        let field_name = &field.ident;
+        let write_fn = quote! {
+            {
+                let value = &self.#field_name;
+                #write_code
+            }
+        };
+        write_fns.push(write_fn);
+    };
+
+    quote! {
+        #(#write_fns)*
+        Ok(())
+    }
+}
+
+fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttribute, field_type: &Option<&syn::Ident>, write_op: bool) -> (u64, TokenStream, TokenStream) {
     let mut field_type_str = field_type.map(|i| i.to_string()).unwrap_or("u8".to_owned());
     if let Some(try_from_type) = &sieve_attr.try_from {
         if let Some(type_path) = try_from_type.as_type_path() {
@@ -240,8 +314,14 @@ fn derive_read_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAt
         } else {
             return (0, quote!(), quote!(compile_error!("try_from must be type.")))
         }
+    } else if let Some(try_from_type) = &global_sieve_attr.try_from {
+        if let Some(type_path) = try_from_type.as_type_path() {
+            field_type_str = type_path.path.segments.last().map(|s| s.ident.to_string()).unwrap_or("u8".to_owned())
+        } else {
+            return (0, quote!(), quote!(compile_error!("try_from must be type.")))
+        }
     }
-    let read_length = match field_type_str.as_str() {
+    let op_length = match field_type_str.as_str() {
         "char" => 1, "bool" => 1,
         "u8" => 1, "i8" => 1,
         "u16" => 2, "i16" => 2,
@@ -264,7 +344,7 @@ fn derive_read_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAt
             None => quote!(byteorder::LittleEndian),
         },
     };
-    let read_preamble = match field_type_str.as_str() {
+    let op_preamble = match field_type_str.as_str() {
         "char" | "bool" | "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64" | "f32" | "f64" => quote! {
             cursor.set_position(offset);
         },
@@ -272,57 +352,175 @@ fn derive_read_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAt
             quote!()
         }
     };
-    let read_fn = match field_type_str.as_str() {
-        "char" => quote! { 
-            byteorder::ReadBytesExt::read_u8(cursor).map(|v| v as char)
-        },
-        "bool" => quote! { 
-            byteorder::ReadBytesExt::read_u8(cursor).map(|v| v != 0)
-        },
-        "u8" => quote! { 
-            byteorder::ReadBytesExt::read_u8(cursor)
-        },
-        "i8" => quote! {
-            byteorder::ReadBytesExt::read_i8(cursor)
-        },
-        "u16" => quote! { 
-            byteorder::ReadBytesExt::read_u16::<#byte_order>(cursor)
-        },
-        "i16" => quote! {
-            byteorder::ReadBytesExt::read_i16::<#byte_order>(cursor)
-        },
-        "u32" => quote! {
-            byteorder::ReadBytesExt::read_u32::<#byte_order>(cursor)
-        },
-        "i32" => quote! {
-            byteorder::ReadBytesExt::read_i32::<#byte_order>(cursor)
-        },
-        "u64" => quote! {
-            byteorder::ReadBytesExt::read_u64::<#byte_order>(cursor)
-        },
-        "i64" => quote! {
-            byteorder::ReadBytesExt::read_i64::<#byte_order>(cursor)
-        },
-        "f32" => quote! {
-            byteorder::ReadBytesExt::read_f32::<#byte_order>(cursor)
-        },
-        "f64" => quote! {
-            byteorder::ReadBytesExt::read_f64::<#byte_order>(cursor)
-        },
-        _ => {
-            quote! {
-                <#field_type as sieve::Sieve>::sift_cursor(cursor, offset)
+    let op_fn = if !write_op { 
+        match field_type_str.as_str() {
+            "char" => quote! { 
+                byteorder::ReadBytesExt::read_u8(cursor).map(|v| v as char)
+            },
+            "bool" => quote! { 
+                byteorder::ReadBytesExt::read_u8(cursor).map(|v| v != 0)
+            },
+            "u8" => quote! { 
+                byteorder::ReadBytesExt::read_u8(cursor)
+            },
+            "i8" => quote! {
+                byteorder::ReadBytesExt::read_i8(cursor)
+            },
+            "u16" => quote! { 
+                byteorder::ReadBytesExt::read_u16::<#byte_order>(cursor)
+            },
+            "i16" => quote! {
+                byteorder::ReadBytesExt::read_i16::<#byte_order>(cursor)
+            },
+            "u32" => quote! {
+                byteorder::ReadBytesExt::read_u32::<#byte_order>(cursor)
+            },
+            "i32" => quote! {
+                byteorder::ReadBytesExt::read_i32::<#byte_order>(cursor)
+            },
+            "u64" => quote! {
+                byteorder::ReadBytesExt::read_u64::<#byte_order>(cursor)
+            },
+            "i64" => quote! {
+                byteorder::ReadBytesExt::read_i64::<#byte_order>(cursor)
+            },
+            "f32" => quote! {
+                byteorder::ReadBytesExt::read_f32::<#byte_order>(cursor)
+            },
+            "f64" => quote! {
+                byteorder::ReadBytesExt::read_f64::<#byte_order>(cursor)
+            },
+            _ => {
+                quote! {
+                    <#field_type as sieve::SieveSift>::sift_cursor_at(cursor, offset)
+                }
+            }
+        }
+    } else {
+        match field_type_str.as_str() {
+            "char" => quote! { 
+                byteorder::WriteBytesExt::write_u8(cursor, *value as u8)
+            },
+            "bool" => quote! { 
+                byteorder::WriteBytesExt::write_u8(cursor, if *value { 1 } else { 0 })
+            },
+            "u8" => quote! { 
+                byteorder::WriteBytesExt::write_u8(cursor, *value)
+            },
+            "i8" => quote! {
+                byteorder::WriteBytesExt::write_i8(cursor, *value)
+            },
+            "u16" => quote! { 
+                byteorder::WriteBytesExt::write_u16::<#byte_order>(cursor, *value)
+            },
+            "i16" => quote! {
+                byteorder::WriteBytesExt::write_i16::<#byte_order>(cursor, *value)
+            },
+            "u32" => quote! {
+                byteorder::WriteBytesExt::write_u32::<#byte_order>(cursor, *value)
+            },
+            "i32" => quote! {
+                byteorder::WriteBytesExt::write_i32::<#byte_order>(cursor, *value)
+            },
+            "u64" => quote! {
+                byteorder::WriteBytesExt::write_u64::<#byte_order>(cursor, *value)
+            },
+            "i64" => quote! {
+                byteorder::WriteBytesExt::write_i64::<#byte_order>(cursor, *value)
+            },
+            "f32" => quote! {
+                byteorder::WriteBytesExt::write_f32::<#byte_order>(cursor, *value)
+            },
+            "f64" => quote! {
+                byteorder::WriteBytesExt::write_f64::<#byte_order>(cursor, *value)
+            },
+            _ => {
+                quote! {
+                    sieve::SieveDisperse::disperse_cursor_at(value, cursor, offset)
+                }
             }
         }
     };
-    let read_fn = if let Some(try_from_type) = &sieve_attr.try_from {
-        quote! {
-            #read_fn.and_then(|v| <#field_type as std::convert::TryFrom<#try_from_type>>::try_from(v).map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, sieve::Error::TryFromError(format!("Failed to try_from {}", #field_type_str)))))
+    let op_fn = if let Some(try_from_type) = &sieve_attr.try_from {
+        if !write_op {
+            quote! {
+                #op_fn.and_then(|v| <#field_type as std::convert::TryFrom<#try_from_type>>::try_from(v).map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, sieve::Error::TryFromError(format!("Failed to try_from {}", #field_type_str)))))
+            }
+        } else {
+            quote! {
+                <#try_from_type as std::convert::TryFrom<#field_type>>::try_from(*value)
+                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, sieve::Error::TryFromError(format!("Failed to try_from {}", "#try_from_type"))))
+                    .and_then(|v| {
+                        let value = &v;
+                        #op_fn
+                    })
+            }
         }
     } else {
-        read_fn
+        op_fn
     };
-    (read_length, read_preamble, read_fn)
+    (op_length, op_preamble, op_fn)
+}
+
+fn derive_field_props(field: &syn::Field) -> Result<(Option<&syn::Ident>, bool, bool, bool), TokenStream> {
+    let mut is_option = false;
+    let mut is_vec = false;
+    let mut is_vec_option = false;
+    let field_type = match &field.ty {
+        syn::Type::Path(type_path) if type_equals(&type_path, "Option") => {
+            is_option = true;
+            match extract_generic_type(type_path) {
+                Ok(type_path) => {
+                    if type_equals(&type_path, "Vec") {
+                        is_vec = true;
+                        match extract_generic_type(type_path) {
+                            Ok(type_path) => {
+                                type_path.path.segments.last().map(|s| &s.ident)
+                            },
+                            Err(msg) => {
+                                return Err(quote!(compile_error!(format!("Unable to parse Vec type: {}", #msg))));
+                            },
+                        }
+                    } else {
+                        type_path.path.segments.last().map(|s| &s.ident)
+                    }
+                },
+                Err(msg) => {
+                    return Err(quote!(compile_error!(format!("Unable to parse Option type: {}", #msg))));
+                },
+            }
+        },
+        syn::Type::Path(type_path) if type_equals(&type_path, "Vec") => {
+            is_vec = true;
+            match extract_generic_type(type_path) {
+                Ok(type_path) => {
+                    if type_equals(&type_path, "Option") {
+                        is_vec_option = true;
+                        match extract_generic_type(type_path) {
+                            Ok(type_path) => {
+                                type_path.path.segments.last().map(|s| &s.ident)
+                            },
+                            Err(msg) => {
+                                return Err(quote!(compile_error!(format!("Unable to parse Vec type: {}", #msg))));
+                            },
+                        }
+                    } else {
+                        type_path.path.segments.last().map(|s| &s.ident)
+                    }
+                },
+                Err(msg) => {
+                    return Err(quote!(compile_error!(format!("Unable to parse Vec type: {}", #msg))));
+                },
+            }
+        },
+        syn::Type::Path(type_path) => {
+            type_path.path.segments.last().map(|s| &s.ident)
+        },
+        _ => {
+            return Err(quote!(compile_error!(format!("Sieve: Invalid type: {#field.ty}"))));
+        }
+    };
+    Ok((field_type, is_option, is_vec, is_vec_option))
 }
 
 trait TypeExt {
