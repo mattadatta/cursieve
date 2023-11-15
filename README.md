@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/sieve.svg)](https://crates.io/crates/sieve)
 [![Documentation](https://docs.rs/sieve/badge.svg)](https://docs.rs/sieve)
 [![License](https://img.shields.io/crates/l/sieve.svg)](https://github.com/mattadatta/sieve/blob/main/LICENSE)
-[![Build Status](https://github.com/mattadatta/sieve/workflows/Rust/badge.svg)](https://github.com/mattadatta/sieve/actions)
+<!-- [![Build Status](https://github.com/mattadatta/sieve/workflows/Rust/badge.svg)](https://github.com/mattadatta/sieve/actions) -->
 
 Sieve is a Rust library that makes it easy to deserialize byte arrays into annotated Rust structures.
 
@@ -23,7 +23,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-sieve = { version = "0.1.0", features = ["derive"] }
+sieve = "0.1.0"
 ```
 
 Then, in your crate:
@@ -75,7 +75,7 @@ You can include this library as a dependency in your Rust project by adding the 
 
 ```toml
 [dependencies]
-sieve = { version = "0.1.0", features = ["derive"] }
+sieve = "0.1.0"
 ```
 
 ## Contributing

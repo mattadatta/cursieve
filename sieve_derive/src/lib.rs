@@ -33,7 +33,7 @@ fn derive_sieve_type2(input: &syn::DeriveInput) -> TokenStream {
 fn derive_sieve_impl(input: &syn::DeriveInput, named_fields: &syn::FieldsNamed) -> TokenStream {
     let struct_name = &input.ident;
     let sift_cursor_at = derive_sieve_sift_cursor_at(input, named_fields);
-    let disperse_cursor_at = derive_sieve_disperse_cursor_at(input, named_fields);
+    let (disperse_cursor_at, computed_size) = derive_sieve_disperse_cursor_at(input, named_fields);
     let generated_code = quote! {
         impl sieve::SieveSift for #struct_name {
             fn sift_cursor_at(cursor: &mut std::io::Cursor<&[u8]>, offset: u64) -> Result<Self, sieve::Error> where Self: Sized {
@@ -41,11 +41,28 @@ fn derive_sieve_impl(input: &syn::DeriveInput, named_fields: &syn::FieldsNamed) 
             }
         }
         impl sieve::SieveDisperse for #struct_name {
+            fn sieve_size() -> usize {
+                #computed_size
+            }
             fn disperse_cursor_at(&self, cursor: &mut std::io::Cursor<&mut [u8]>, offset: u64) -> Result<(), sieve::Error> {
                 #disperse_cursor_at
             }
         }
         impl sieve::Sieve for #struct_name {
+        }
+        impl std::convert::TryFrom<&[u8]> for #struct_name {
+            type Error = sieve::Error;
+        
+            fn try_from(v: &[u8]) -> Result<#struct_name, Self::Error> {
+                <#struct_name as sieve::SieveSift>::sift(v)
+            }
+        }
+        impl std::convert::TryFrom<&#struct_name> for Vec<u8> {
+            type Error = sieve::Error;
+        
+            fn try_from(v: &#struct_name) -> Result<Vec<u8>, Self::Error> {
+                <#struct_name as sieve::SieveDisperse>::to_bytes(v)
+            }
         }
     };
     generated_code
@@ -59,7 +76,7 @@ fn derive_sieve_sift_cursor_at(input: &syn::DeriveInput, named_fields: &syn::Fie
     let mut read_fns = Vec::<TokenStream>::with_capacity(named_fields.named.len());
     for field in named_fields.named.iter() {
         let sieve_attr = get_sieve_attr(&field.attrs).unwrap_or_default();
-        let (field_type, is_option, is_vec, is_vec_option) = match derive_field_props(field) {
+        let (type_path, is_option, is_vec, is_vec_option) = match derive_field_props(field) {
             Ok(args) => args,
             Err(s) => return s,
         };
@@ -68,13 +85,13 @@ fn derive_sieve_sift_cursor_at(input: &syn::DeriveInput, named_fields: &syn::Fie
             current_offset = global_offset + attr_offset
         }
 
-        let (read_length, read_preamble, read_function) = derive_op_function(&global_sieve_attr, &sieve_attr, &field_type, false);
+        let (read_length, read_preamble, read_function) = derive_op_function(&global_sieve_attr, &sieve_attr, type_path, false);
         let read_count = sieve_attr.count.unwrap_or(1);
         let read_code = if is_option {
             if is_vec {
                 let read_code = if is_vec_option {
                     quote! {
-                        let mut results = Vec::<Option<#field_type>>::with_capacity(#read_count);
+                        let mut results = Vec::<Option<#type_path>>::with_capacity(#read_count);
                         for n in 0..#read_count {
                             let offset = #current_offset + offset + ((n as u64) * #read_length);
                             #read_preamble
@@ -85,7 +102,7 @@ fn derive_sieve_sift_cursor_at(input: &syn::DeriveInput, named_fields: &syn::Fie
                     }
                 } else {
                     quote! {
-                        let mut results = Vec::<#field_type>::with_capacity(#read_count);
+                        let mut results = Vec::<#type_path>::with_capacity(#read_count);
                         let mut did_error = false;
                         for n in 0..#read_count {
                             let offset = #current_offset + offset + ((n as u64) * #read_length);
@@ -121,7 +138,7 @@ fn derive_sieve_sift_cursor_at(input: &syn::DeriveInput, named_fields: &syn::Fie
             if is_vec {
                 let read_code = if is_vec_option {
                     quote! {
-                        let mut results = Vec::<Option<#field_type>>::with_capacity(#read_count);
+                        let mut results = Vec::<Option<#type_path>>::with_capacity(#read_count);
                         for n in 0..#read_count {
                             let offset = #current_offset + offset + ((n as u64) * #read_length);
                             #read_preamble
@@ -132,7 +149,7 @@ fn derive_sieve_sift_cursor_at(input: &syn::DeriveInput, named_fields: &syn::Fie
                     }
                 } else {
                     quote! {
-                        let mut results = Vec::<#field_type>::with_capacity(#read_count);
+                        let mut results = Vec::<#type_path>::with_capacity(#read_count);
                         for n in 0..#read_count {
                             let offset = #current_offset + offset + ((n as u64) * #read_length);
                             #read_preamble
@@ -185,23 +202,23 @@ fn derive_sieve_sift_cursor_at(input: &syn::DeriveInput, named_fields: &syn::Fie
     }
 }
 
-fn derive_sieve_disperse_cursor_at(input: &syn::DeriveInput, named_fields: &syn::FieldsNamed) -> TokenStream {
+fn derive_sieve_disperse_cursor_at(input: &syn::DeriveInput, named_fields: &syn::FieldsNamed) -> (TokenStream, usize) {
     let global_sieve_attr = get_sieve_attr(&input.attrs).unwrap_or_default();
     let global_offset = global_sieve_attr.offset.unwrap_or(0);
     let mut current_offset: u64 = global_offset;
     let mut write_fns = Vec::<TokenStream>::with_capacity(named_fields.named.len());
     for field in named_fields.named.iter() {
         let sieve_attr = get_sieve_attr(&field.attrs).unwrap_or_default();
-        let (field_type, is_option, is_vec, is_vec_option) = match derive_field_props(field) {
+        let (type_path, is_option, is_vec, is_vec_option) = match derive_field_props(field) {
             Ok(args) => args,
-            Err(s) => return s,
+            Err(s) => return (s, 0),
         };
 
         if let Some(attr_offset) = &sieve_attr.offset {
             current_offset = global_offset + attr_offset
         }
 
-        let (write_length, write_preamble, write_function) = derive_op_function(&global_sieve_attr, &sieve_attr, &field_type, true);
+        let (write_length, write_preamble, write_function) = derive_op_function(&global_sieve_attr, &sieve_attr, type_path, true);
         let write_count = sieve_attr.count.unwrap_or(1);
         let write_code = if is_option {
             if is_vec {
@@ -299,22 +316,30 @@ fn derive_sieve_disperse_cursor_at(input: &syn::DeriveInput, named_fields: &syn:
         write_fns.push(write_fn);
     };
 
-    quote! {
+    let body = quote! {
         #(#write_fns)*
         Ok(())
-    }
+    };
+
+    (body, current_offset as usize)
 }
 
-fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttribute, field_type: &Option<&syn::Ident>, write_op: bool) -> (u64, TokenStream, TokenStream) {
+fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttribute, type_path: &syn::TypePath, write_op: bool) -> (u64, TokenStream, TokenStream) {
+    let field_type = type_path.path.segments.last().map(|s| &s.ident);
     let mut field_type_str = field_type.map(|i| i.to_string()).unwrap_or("u8".to_owned());
-    let try_from_result = match extract_try_from(global_sieve_attr, sieve_attr) {
+    let attrs_try_from = sieve_attr.try_from
+        .as_ref()
+        .or_else(|| global_sieve_attr.try_from.as_ref())
+        .map(|try_from_type| try_from_type.as_type_path().ok_or(()))
+        .transpose();
+    let try_from_result = match attrs_try_from {
         Ok(try_from) => try_from,
         Err(_) => return (0, quote!(), quote!(compile_error!("try_from must be type."))),
     };
     let mut try_from: Option<&syn::TypePath> = None;
-    if let Some((f_str, t_from)) = try_from_result {
-        field_type_str = f_str;
-        try_from = Some(t_from);
+    if let Some(type_path) = try_from_result {
+        field_type_str = type_path.path.segments.last().map(|s| s.ident.to_string()).unwrap_or("u8".to_owned());
+        try_from = Some(type_path);
     }
     let op_length = match field_type_str.as_str() {
         "char" => 1, "bool" => 1,
@@ -327,7 +352,7 @@ fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttr
             if let Some(stride) = sieve_attr.stride {
                 stride
             } else {
-                let error = format!("`{}` Sieve type must be declared with `stride` attribute.", field_type_str);
+                let error = format!("`{}` Sieve type must be declared with `stride` attribute.", stringify!(type_path));
                 return (0, quote!(), quote!(compile_error!(#error)))
             }
         }
@@ -387,7 +412,7 @@ fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttr
             },
             _ => {
                 quote! {
-                    <#field_type as sieve::SieveSift>::sift_cursor_at(cursor, offset)
+                    <#type_path as sieve::SieveSift>::sift_cursor_at(cursor, offset)
                 }
             }
         }
@@ -439,12 +464,12 @@ fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttr
     let op_fn = if let Some(try_from_type) = try_from {
         if !write_op {
             quote! {
-                #op_fn.and_then(|v| <#field_type as std::convert::TryFrom<#try_from_type>>::try_from(v).map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, sieve::Error::TryFromError(format!("Failed to {:?}::try_from({:?} as {:?})", stringify!(#field_type), v, stringify!(#try_from_type))))))
+                #op_fn.and_then(|v| <#type_path as std::convert::TryFrom<#try_from_type>>::try_from(v).map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, sieve::Error::TryFromError(format!("Failed to {:?}::try_from({:?} as {:?})", stringify!(#field_type), v, stringify!(#try_from_type))))))
             }
         } else {
             quote! {
-                <#try_from_type as std::convert::TryFrom<#field_type>>::try_from(*value)
-                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, sieve::Error::TryFromError(format!("Failed to {:?}::try_from({:?} as {:?})", stringify!(#try_from_type), *value, stringify!(#field_type)))))
+                <#try_from_type as std::convert::TryFrom<#type_path>>::try_from(*value)
+                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, sieve::Error::TryFromError(format!("Failed to {:?}::try_from({:?} as {:?})", stringify!(#try_from_type), *value, stringify!(#type_path)))))
                     .and_then(|v| {
                         let value = &v;
                         #op_fn
@@ -457,11 +482,11 @@ fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttr
     (op_length, op_preamble, op_fn)
 }
 
-fn derive_field_props(field: &syn::Field) -> Result<(Option<&syn::Ident>, bool, bool, bool), TokenStream> {
+fn derive_field_props(field: &syn::Field) -> Result<(&syn::TypePath, bool, bool, bool), TokenStream> {
     let mut is_option = false;
     let mut is_vec = false;
     let mut is_vec_option = false;
-    let field_type = match &field.ty {
+    let type_path = match &field.ty {
         syn::Type::Path(type_path) if type_equals(&type_path, "Option") => {
             is_option = true;
             match extract_generic_type(type_path) {
@@ -470,14 +495,14 @@ fn derive_field_props(field: &syn::Field) -> Result<(Option<&syn::Ident>, bool, 
                         is_vec = true;
                         match extract_generic_type(type_path) {
                             Ok(type_path) => {
-                                type_path.path.segments.last().map(|s| &s.ident)
+                                type_path
                             },
                             Err(msg) => {
                                 return Err(quote!(compile_error!(format!("Unable to parse Vec type: {}", #msg))));
                             },
                         }
                     } else {
-                        type_path.path.segments.last().map(|s| &s.ident)
+                        type_path
                     }
                 },
                 Err(msg) => {
@@ -493,14 +518,14 @@ fn derive_field_props(field: &syn::Field) -> Result<(Option<&syn::Ident>, bool, 
                         is_vec_option = true;
                         match extract_generic_type(type_path) {
                             Ok(type_path) => {
-                                type_path.path.segments.last().map(|s| &s.ident)
+                                type_path
                             },
                             Err(msg) => {
                                 return Err(quote!(compile_error!(format!("Unable to parse Vec type: {}", #msg))));
                             },
                         }
                     } else {
-                        type_path.path.segments.last().map(|s| &s.ident)
+                        type_path
                     }
                 },
                 Err(msg) => {
@@ -509,31 +534,13 @@ fn derive_field_props(field: &syn::Field) -> Result<(Option<&syn::Ident>, bool, 
             }
         },
         syn::Type::Path(type_path) => {
-            type_path.path.segments.last().map(|s| &s.ident)
+            type_path
         },
         _ => {
             return Err(quote!(compile_error!(format!("Sieve: Invalid type: {#field.ty}"))));
         }
     };
-    Ok((field_type, is_option, is_vec, is_vec_option))
-}
-
-fn extract_try_from<'a>(global_sieve_attr: &'a SieveAttribute, sieve_attr: &'a SieveAttribute) -> Result<Option<(String, &'a syn::TypePath)>, ()> {
-    if let Some(try_from_type) = &sieve_attr.try_from {
-        if let Some(type_path) = try_from_type.as_type_path() {
-            Ok(Some((type_path.path.segments.last().map(|s| s.ident.to_string()).unwrap_or("u8".to_owned()), type_path)))
-        } else {
-            Err(())
-        }
-    } else if let Some(try_from_type) = &global_sieve_attr.try_from {
-        if let Some(type_path) = try_from_type.as_type_path() {
-            Ok(Some((type_path.path.segments.last().map(|s| s.ident.to_string()).unwrap_or("u8".to_owned()), type_path)))
-        } else {
-            Err(())
-        }
-    } else {
-        Ok(None)
-    }
+    Ok((type_path, is_option, is_vec, is_vec_option))
 }
 
 trait TypeExt {
