@@ -186,7 +186,6 @@ fn derive_sieve_sift_cursor_at(input: &syn::DeriveInput, named_fields: &syn::Fie
 }
 
 fn derive_sieve_disperse_cursor_at(input: &syn::DeriveInput, named_fields: &syn::FieldsNamed) -> TokenStream {
-    let struct_name = &input.ident;
     let global_sieve_attr = get_sieve_attr(&input.attrs).unwrap_or_default();
     let global_offset = global_sieve_attr.offset.unwrap_or(0);
     let mut current_offset: u64 = global_offset;
@@ -308,18 +307,14 @@ fn derive_sieve_disperse_cursor_at(input: &syn::DeriveInput, named_fields: &syn:
 
 fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttribute, field_type: &Option<&syn::Ident>, write_op: bool) -> (u64, TokenStream, TokenStream) {
     let mut field_type_str = field_type.map(|i| i.to_string()).unwrap_or("u8".to_owned());
-    if let Some(try_from_type) = &sieve_attr.try_from {
-        if let Some(type_path) = try_from_type.as_type_path() {
-            field_type_str = type_path.path.segments.last().map(|s| s.ident.to_string()).unwrap_or("u8".to_owned())
-        } else {
-            return (0, quote!(), quote!(compile_error!("try_from must be type.")))
-        }
-    } else if let Some(try_from_type) = &global_sieve_attr.try_from {
-        if let Some(type_path) = try_from_type.as_type_path() {
-            field_type_str = type_path.path.segments.last().map(|s| s.ident.to_string()).unwrap_or("u8".to_owned())
-        } else {
-            return (0, quote!(), quote!(compile_error!("try_from must be type.")))
-        }
+    let try_from_result = match extract_try_from(global_sieve_attr, sieve_attr) {
+        Ok(try_from) => try_from,
+        Err(_) => return (0, quote!(), quote!(compile_error!("try_from must be type."))),
+    };
+    let mut try_from: Option<&syn::TypePath> = None;
+    if let Some((f_str, t_from)) = try_from_result {
+        field_type_str = f_str;
+        try_from = Some(t_from);
     }
     let op_length = match field_type_str.as_str() {
         "char" => 1, "bool" => 1,
@@ -441,15 +436,15 @@ fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttr
             }
         }
     };
-    let op_fn = if let Some(try_from_type) = &sieve_attr.try_from {
+    let op_fn = if let Some(try_from_type) = try_from {
         if !write_op {
             quote! {
-                #op_fn.and_then(|v| <#field_type as std::convert::TryFrom<#try_from_type>>::try_from(v).map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, sieve::Error::TryFromError(format!("Failed to try_from {}", #field_type_str)))))
+                #op_fn.and_then(|v| <#field_type as std::convert::TryFrom<#try_from_type>>::try_from(v).map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, sieve::Error::TryFromError(format!("Failed to {:?}::try_from({:?} as {:?})", stringify!(#field_type), v, stringify!(#try_from_type))))))
             }
         } else {
             quote! {
                 <#try_from_type as std::convert::TryFrom<#field_type>>::try_from(*value)
-                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, sieve::Error::TryFromError(format!("Failed to try_from {}", "#try_from_type"))))
+                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, sieve::Error::TryFromError(format!("Failed to {:?}::try_from({:?} as {:?})", stringify!(#try_from_type), *value, stringify!(#field_type)))))
                     .and_then(|v| {
                         let value = &v;
                         #op_fn
@@ -521,6 +516,24 @@ fn derive_field_props(field: &syn::Field) -> Result<(Option<&syn::Ident>, bool, 
         }
     };
     Ok((field_type, is_option, is_vec, is_vec_option))
+}
+
+fn extract_try_from<'a>(global_sieve_attr: &'a SieveAttribute, sieve_attr: &'a SieveAttribute) -> Result<Option<(String, &'a syn::TypePath)>, ()> {
+    if let Some(try_from_type) = &sieve_attr.try_from {
+        if let Some(type_path) = try_from_type.as_type_path() {
+            Ok(Some((type_path.path.segments.last().map(|s| s.ident.to_string()).unwrap_or("u8".to_owned()), type_path)))
+        } else {
+            Err(())
+        }
+    } else if let Some(try_from_type) = &global_sieve_attr.try_from {
+        if let Some(type_path) = try_from_type.as_type_path() {
+            Ok(Some((type_path.path.segments.last().map(|s| s.ident.to_string()).unwrap_or("u8".to_owned()), type_path)))
+        } else {
+            Err(())
+        }
+    } else {
+        Ok(None)
+    }
 }
 
 trait TypeExt {

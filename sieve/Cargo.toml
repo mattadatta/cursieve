@@ -1,5 +1,5 @@
 [package]
-name = "sieve_derive"
+name = "sieve"
 version = "0.1.0"
 authors = ["Matthew Brown"]
 edition = "2021"
@@ -13,11 +13,7 @@ license-file = "LICENSE"
 keywords = ["serialize", "pack", "struct", "byte", "parse"]
 categories = ["data-structures", "parsing"]
 
-[lib]
-proc-macro = true
-
 [dependencies]
+sieve_derive = { path = "../sieve_derive", version = "0.1.0" }
 thiserror = "1.0.50"
-syn = { version = "2.0.39", features = ["parsing"] }
-proc-macro2 = "1.0.69"
-quote = "1.0.33"
+byteorder = "1.5.0"
