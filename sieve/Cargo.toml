@@ -3,14 +3,14 @@ name = "sieve"
 version = "0.1.0"
 authors = ["Matthew Brown"]
 edition = "2021"
-rust-version = "1.56"
+rust-version = "1.60"
 description = "Sieve is a Rust library that makes it easy to deserialize byte arrays into annotated Rust structures"
 documentation = "https://docs.rs/sieve"
 readme = "README.md"
 homepage = "https://github.com/mattadatta/sieve"
 repository = "https://github.com/mattadatta/sieve"
 license-file = "LICENSE"
-keywords = ["serialize", "pack", "struct", "byte", "parse"]
+keywords = ["serialize", "unpack", "struct", "byte", "parse"]
 categories = ["data-structures", "parsing"]
 
 [dependencies]
