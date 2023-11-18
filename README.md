@@ -1,21 +1,21 @@
-# Sieve
+# Cursieve
 
 [![Crates.io](https://img.shields.io/crates/v/sieve.svg)](https://crates.io/crates/sieve)
 [![Documentation](https://docs.rs/sieve/badge.svg)](https://docs.rs/sieve)
 [![License](https://img.shields.io/crates/l/sieve.svg)](https://github.com/mattadatta/sieve/blob/main/LICENSE)
 <!-- [![Build Status](https://github.com/mattadatta/sieve/workflows/Rust/badge.svg)](https://github.com/mattadatta/sieve/actions) -->
 
-Sieve is a Rust library that makes it easy to deserialize byte arrays into annotated Rust structures.
+Cursieve is a Rust library that makes it easy to deserialize byte arrays into annotated Rust structures.
 
-As the name suggests, this library is most useful when you have existing byte data you want to extract non-contiguous information out of and into Rust structures you can freely and easily modify, which can later be reserialized, leaving other bytes untouched.
+Curseive generates the appropriate read and write methods to pack and unpack your custom Rust types using `std::io::Cursor`. This library is most useful when you have existing byte data you want to extract non-contiguous information out of and into Rust structures you can freely and easily modify, which can later be reserialized, leaving other bytes untouched.
 
 ## Features
 
 Generates `sift` and `disperse` functions that allow you to generate a structure from existing byte data, or deserialize an existing structure across a given byte array.
 
 - Implemented using `std::io::Cursor` and [byteorder](https://crates.io/crates/byteorder), with support for endianness
-- Serialize primitives and other Sieve-derived types easily; opt-in other fields with `try_from` support
-- Annotate only where needed; Sieve automatically computes the size of your structure and offsets required to serialize; for non-contiguous reading, simply annotate the start of each contiguous section
+- Serialize primitives and other Cursieve-derived types easily; opt-in other fields with `try_from` support
+- Annotate only where needed; Cursieve automatically computes the size of your structure and offsets required to serialize; for non-contiguous reading, simply annotate the start of each contiguous region
 
 ## Usage
 
@@ -23,13 +23,13 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-sieve = "0.1.0"
+cursieve = "0.1.0"
 ```
 
 Then, in your crate:
 
 ```rust
-use sieve::Sieve;
+use cursieve::Sieve;
 
 #[derive(Sieve)]
 struct MyStruct {
@@ -41,7 +41,7 @@ struct MyStruct {
 
 ## Example
 
-Here's a simple example of how to use `Sieve`:
+Here's a simple example of how to use `Cursieve`:
 
 ```rust
 #[derive(Debug, Sieve)]
@@ -75,7 +75,7 @@ You can include this library as a dependency in your Rust project by adding the 
 
 ```toml
 [dependencies]
-sieve = "0.1.0"
+cursieve = "0.1.0"
 ```
 
 ## Contributing

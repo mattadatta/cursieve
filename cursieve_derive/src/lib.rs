@@ -35,33 +35,33 @@ fn derive_sieve_impl(input: &syn::DeriveInput, named_fields: &syn::FieldsNamed) 
     let sift_cursor_at = derive_sieve_sift_cursor_at(input, named_fields);
     let (disperse_cursor_at, computed_size) = derive_sieve_disperse_cursor_at(input, named_fields);
     let generated_code = quote! {
-        impl sieve::SieveSift for #struct_name {
-            fn sift_cursor_at(cursor: &mut std::io::Cursor<&[u8]>, offset: u64) -> Result<Self, sieve::Error> where Self: Sized {
+        impl cursieve::SieveSift for #struct_name {
+            fn sift_cursor_at(cursor: &mut std::io::Cursor<&[u8]>, offset: u64) -> Result<Self, cursieve::Error> where Self: Sized {
                 #sift_cursor_at
             }
         }
-        impl sieve::SieveDisperse for #struct_name {
+        impl cursieve::SieveDisperse for #struct_name {
             fn sieve_size() -> usize {
                 #computed_size
             }
-            fn disperse_cursor_at(&self, cursor: &mut std::io::Cursor<&mut [u8]>, offset: u64) -> Result<(), sieve::Error> {
+            fn disperse_cursor_at(&self, cursor: &mut std::io::Cursor<&mut [u8]>, offset: u64) -> Result<(), cursieve::Error> {
                 #disperse_cursor_at
             }
         }
-        impl sieve::Sieve for #struct_name {
+        impl cursieve::Sieve for #struct_name {
         }
         impl std::convert::TryFrom<&[u8]> for #struct_name {
-            type Error = sieve::Error;
+            type Error = cursieve::Error;
         
             fn try_from(v: &[u8]) -> Result<#struct_name, Self::Error> {
-                <#struct_name as sieve::SieveSift>::sift(v)
+                <#struct_name as cursieve::SieveSift>::sift(v)
             }
         }
         impl std::convert::TryFrom<&#struct_name> for Vec<u8> {
-            type Error = sieve::Error;
+            type Error = cursieve::Error;
         
             fn try_from(v: &#struct_name) -> Result<Vec<u8>, Self::Error> {
-                <#struct_name as sieve::SieveDisperse>::to_bytes(v)
+                <#struct_name as cursieve::SieveDisperse>::to_bytes(v)
             }
         }
     };
@@ -412,7 +412,7 @@ fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttr
             },
             _ => {
                 quote! {
-                    <#type_path as sieve::SieveSift>::sift_cursor_at(cursor, offset)
+                    <#type_path as cursieve::SieveSift>::sift_cursor_at(cursor, offset)
                 }
             }
         }
@@ -456,7 +456,7 @@ fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttr
             },
             _ => {
                 quote! {
-                    sieve::SieveDisperse::disperse_cursor_at(value, cursor, offset)
+                    cursieve::SieveDisperse::disperse_cursor_at(value, cursor, offset)
                 }
             }
         }
@@ -464,12 +464,12 @@ fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttr
     let op_fn = if let Some(try_from_type) = try_from {
         if !write_op {
             quote! {
-                #op_fn.and_then(|v| <#type_path as std::convert::TryFrom<#try_from_type>>::try_from(v).map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, sieve::Error::TryFromError(format!("Failed to {:?}::try_from({:?} as {:?})", stringify!(#field_type), v, stringify!(#try_from_type))))))
+                #op_fn.and_then(|v| <#type_path as std::convert::TryFrom<#try_from_type>>::try_from(v).map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, cursieve::Error::TryFromError(format!("Failed to {:?}::try_from({:?} as {:?})", stringify!(#field_type), v, stringify!(#try_from_type))))))
             }
         } else {
             quote! {
                 <#try_from_type as std::convert::TryFrom<#type_path>>::try_from(*value)
-                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, sieve::Error::TryFromError(format!("Failed to {:?}::try_from({:?} as {:?})", stringify!(#try_from_type), *value, stringify!(#type_path)))))
+                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, cursieve::Error::TryFromError(format!("Failed to {:?}::try_from({:?} as {:?})", stringify!(#try_from_type), *value, stringify!(#type_path)))))
                     .and_then(|v| {
                         let value = &v;
                         #op_fn

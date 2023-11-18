@@ -1,0 +1,19 @@
+[package]
+name = "cursieve"
+version = "0.1.0"
+authors = ["Matthew Brown"]
+edition = "2021"
+rust-version = "1.60"
+description = "Cursieve is a Rust library that makes it easy to deserialize byte arrays into annotated Rust structures"
+documentation = "https://docs.rs/cursieve"
+readme = "README.md"
+homepage = "https://github.com/mattadatta/cursieve"
+repository = "https://github.com/mattadatta/cursieve"
+license-file = "LICENSE"
+keywords = ["serialize", "unpack", "struct", "byte", "parse"]
+categories = ["data-structures", "parsing"]
+
+[dependencies]
+cursieve_derive = { path = "../cursieve_derive", version = "0.1.0" }
+thiserror = "1.0.50"
+byteorder = "1.5.0"

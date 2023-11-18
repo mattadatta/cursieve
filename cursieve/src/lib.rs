@@ -1,4 +1,4 @@
-pub use sieve_derive::Sieve;
+pub use cursieve_derive::Sieve;
 
 pub trait Sieve: SieveSift + SieveDisperse {
 }
