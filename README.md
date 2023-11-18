@@ -1,9 +1,9 @@
 # Cursieve
 
-[![Crates.io](https://img.shields.io/crates/v/sieve.svg)](https://crates.io/crates/sieve)
-[![Documentation](https://docs.rs/sieve/badge.svg)](https://docs.rs/sieve)
-[![License](https://img.shields.io/crates/l/sieve.svg)](https://github.com/mattadatta/sieve/blob/main/LICENSE)
-<!-- [![Build Status](https://github.com/mattadatta/sieve/workflows/Rust/badge.svg)](https://github.com/mattadatta/sieve/actions) -->
+[![Crates.io](https://img.shields.io/crates/v/cursieve.svg)](https://crates.io/crates/cursieve)
+[![Documentation](https://docs.rs/cursieve/badge.svg)](https://docs.rs/cursieve)
+[![License](https://img.shields.io/crates/l/cursieve.svg)](https://github.com/mattadatta/cursieve/blob/main/LICENSE)
+<!-- [![Build Status](https://github.com/mattadatta/cursieve/workflows/Rust/badge.svg)](https://github.com/mattadatta/cursieve/actions) -->
 
 Cursieve is a Rust library that makes it easy to deserialize byte arrays into annotated Rust structures.
 
