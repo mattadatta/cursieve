@@ -85,6 +85,7 @@ fn derive_sieve_sift_cursor_at(input: &syn::DeriveInput, named_fields: &syn::Fie
             current_offset = global_offset + attr_offset
         }
 
+        let field_type_str = type_path.to_field_type_str();
         let (read_length, read_preamble, read_function) = derive_op_function(&global_sieve_attr, &sieve_attr, type_path, false);
         let read_count = sieve_attr.count.unwrap_or(1);
         let read_code = if is_option {
@@ -101,23 +102,35 @@ fn derive_sieve_sift_cursor_at(input: &syn::DeriveInput, named_fields: &syn::Fie
                         Some(results)
                     }
                 } else {
-                    quote! {
-                        let mut results = Vec::<#type_path>::with_capacity(#read_count);
-                        let mut did_error = false;
-                        for n in 0..#read_count {
-                            let offset = #current_offset + offset + ((n as u64) * #read_length);
+                    if field_type_str == "u8" {
+                        quote! {
+                            let mut buf: Vec<#type_path> = vec![0; #read_count];
+                            let offset = #current_offset + offset;
                             #read_preamble
-                            if let Ok(result) = #read_function {
-                                results.push(result);
-                            } else {
-                                did_error = true;
-                                break;
+                            match std::io::Read::read_exact(cursor, &mut buf) {
+                                Ok(_) => Some(buf),
+                                Err(_) => None,
                             }
                         }
-                        if did_error {
-                            None
-                        } else {
-                            Some(results)
+                    } else {
+                        quote! {
+                            let mut results = Vec::<#type_path>::with_capacity(#read_count);
+                            let mut did_error = false;
+                            for n in 0..#read_count {
+                                let offset = #current_offset + offset + ((n as u64) * #read_length);
+                                #read_preamble
+                                if let Ok(result) = #read_function {
+                                    results.push(result);
+                                } else {
+                                    did_error = true;
+                                    break;
+                                }
+                            }
+                            if did_error {
+                                None
+                            } else {
+                                Some(results)
+                            }
                         }
                     }
                 };
@@ -148,15 +161,25 @@ fn derive_sieve_sift_cursor_at(input: &syn::DeriveInput, named_fields: &syn::Fie
                         results
                     }
                 } else {
-                    quote! {
-                        let mut results = Vec::<#type_path>::with_capacity(#read_count);
-                        for n in 0..#read_count {
-                            let offset = #current_offset + offset + ((n as u64) * #read_length);
+                    if field_type_str == "u8" {
+                        quote! {
+                            let mut buf: Vec<#type_path> = vec![0; #read_count];
+                            let offset = #current_offset + offset;
                             #read_preamble
-                            let result = #read_function?;
-                            results.push(result);
+                            std::io::Read::read_exact(cursor, &mut buf)?;
+                            buf
                         }
-                        results
+                    } else {
+                        quote! {
+                            let mut results = Vec::<#type_path>::with_capacity(#read_count);
+                            for n in 0..#read_count {
+                                let offset = #current_offset + offset + ((n as u64) * #read_length);
+                                #read_preamble
+                                let result = #read_function?;
+                                results.push(result);
+                            }
+                            results
+                        }
                     }
                 };
                 current_offset += read_length * (read_count as u64);
@@ -218,6 +241,7 @@ fn derive_sieve_disperse_cursor_at(input: &syn::DeriveInput, named_fields: &syn:
             current_offset = global_offset + attr_offset
         }
 
+        let field_type_str = type_path.to_field_type_str();
         let (write_length, write_preamble, write_function) = derive_op_function(&global_sieve_attr, &sieve_attr, type_path, true);
         let write_count = sieve_attr.count.unwrap_or(1);
         let write_code = if is_option {
@@ -237,13 +261,23 @@ fn derive_sieve_disperse_cursor_at(input: &syn::DeriveInput, named_fields: &syn:
                         }
                     }
                 } else {
-                    quote! {
-                        if let Some(values) = value {
-                            for n in 0..#write_count {
-                                if let Some(value) = values.get(n) {
-                                    let offset = #current_offset + offset + ((n as u64) * #write_length);
-                                    #write_preamble
-                                    #write_function?;
+                    if field_type_str == "u8" {
+                        quote! {
+                            if let Some(values) = value {
+                                let offset = #current_offset + offset;
+                                #write_preamble
+                                std::io::Write::write(cursor, &values)?;
+                            }
+                        }
+                    } else {
+                        quote! {
+                            if let Some(values) = value {
+                                for n in 0..#write_count {
+                                    if let Some(value) = values.get(n) {
+                                        let offset = #current_offset + offset + ((n as u64) * #write_length);
+                                        #write_preamble
+                                        #write_function?;
+                                    }
                                 }
                             }
                         }
@@ -280,13 +314,21 @@ fn derive_sieve_disperse_cursor_at(input: &syn::DeriveInput, named_fields: &syn:
                         }
                     }
                 } else {
-                    quote! {
-                        let values = value;
-                        for n in 0..#write_count {
-                            if let Some(value) = values.get(n) {
-                                let offset = #current_offset + offset + ((n as u64) * #write_length);
-                                #write_preamble
-                                #write_function?;
+                    if field_type_str == "u8" {
+                        quote! {
+                            let offset = #current_offset + offset;
+                            #write_preamble
+                            std::io::Write::write(cursor, value)?;
+                        }
+                    } else {
+                        quote! {
+                            let values = value;
+                            for n in 0..#write_count {
+                                if let Some(value) = values.get(n) {
+                                    let offset = #current_offset + offset + ((n as u64) * #write_length);
+                                    #write_preamble
+                                    #write_function?;
+                                }
                             }
                         }
                     }
@@ -338,7 +380,7 @@ fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttr
     };
     let mut try_from: Option<&syn::TypePath> = None;
     if let Some(type_path) = try_from_result {
-        field_type_str = type_path.path.segments.last().map(|s| s.ident.to_string()).unwrap_or("u8".to_owned());
+        field_type_str = type_path.to_field_type_str();
         try_from = Some(type_path);
     }
     let op_length = match field_type_str.as_str() {
@@ -410,10 +452,8 @@ fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttr
             "f64" => quote! {
                 byteorder::ReadBytesExt::read_f64::<#byte_order>(cursor)
             },
-            _ => {
-                quote! {
-                    <#type_path as cursieve::SieveSift>::sift_cursor_at(cursor, offset)
-                }
+            _ => quote! {
+                <#type_path as cursieve::SieveSift>::sift_cursor_at(cursor, offset)
             }
         }
     } else {
@@ -454,10 +494,8 @@ fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttr
             "f64" => quote! {
                 byteorder::WriteBytesExt::write_f64::<#byte_order>(cursor, *value)
             },
-            _ => {
-                quote! {
-                    cursieve::SieveDisperse::disperse_cursor_at(value, cursor, offset)
-                }
+            _ => quote! {
+                cursieve::SieveDisperse::disperse_cursor_at(value, cursor, offset)
             }
         }
     };
@@ -487,13 +525,13 @@ fn derive_field_props(field: &syn::Field) -> Result<(&syn::TypePath, bool, bool,
     let mut is_vec = false;
     let mut is_vec_option = false;
     let type_path = match &field.ty {
-        syn::Type::Path(type_path) if type_equals(&type_path, "Option") => {
+        syn::Type::Path(type_path) if type_path.equals_str("Option") => {
             is_option = true;
-            match extract_generic_type(type_path) {
+            match type_path.generics_type_path() {
                 Ok(type_path) => {
-                    if type_equals(&type_path, "Vec") {
+                    if type_path.equals_str("Vec") {
                         is_vec = true;
-                        match extract_generic_type(type_path) {
+                        match type_path.generics_type_path() {
                             Ok(type_path) => {
                                 type_path
                             },
@@ -510,13 +548,13 @@ fn derive_field_props(field: &syn::Field) -> Result<(&syn::TypePath, bool, bool,
                 },
             }
         },
-        syn::Type::Path(type_path) if type_equals(&type_path, "Vec") => {
+        syn::Type::Path(type_path) if type_path.equals_str("Vec") => {
             is_vec = true;
-            match extract_generic_type(type_path) {
+            match type_path.generics_type_path() {
                 Ok(type_path) => {
-                    if type_equals(&type_path, "Option") {
+                    if type_path.equals_str("Option") {
                         is_vec_option = true;
-                        match extract_generic_type(type_path) {
+                        match type_path.generics_type_path() {
                             Ok(type_path) => {
                                 type_path
                             },
@@ -557,29 +595,39 @@ impl TypeExt for syn::Type {
     }
 }
 
-fn extract_generic_type(type_path: &syn::TypePath) -> Result<&syn::TypePath, String> {
-    let generic_type = &type_path.path.segments.last().unwrap().arguments;
-    if let syn::PathArguments::AngleBracketed(args) = generic_type {
-        if args.args.len() == 1 {
-            if let syn::GenericArgument::Type(ty) = args.args.first().unwrap() {
-                if let syn::Type::Path(type_path) = ty {
-                    Ok(type_path)
-                } else {
-                    Err("Unsupported type within Option.".to_owned())
-                }
-            } else {
-                Err("Invalid type.".to_owned())
-            }
-        } else {
-            Err("Unsupported number of generic arguments.".to_owned())
-        }
-    } else {
-        Err("Non-parameterized type.".to_owned())
-    }
+trait TypePathExt {
+    fn to_field_type_str(&self) -> String;
+    fn equals_str(&self, s: &str) -> bool;
+    fn generics_type_path(&self) -> Result<&syn::TypePath, String>;
 }
 
-fn type_equals(type_path: &syn::TypePath, t: &str) -> bool {
-    type_path.path.segments.last().map_or(false, |segment| segment.ident == t)
+impl TypePathExt for syn::TypePath {
+    fn to_field_type_str(&self) -> String {
+        self.path.segments.last().map(|s| &s.ident).map(|i| i.to_string()).unwrap_or("u8".to_owned())
+    }
+    fn equals_str(&self, s: &str) -> bool {
+        self.path.segments.last().map_or(false, |segment| segment.ident == s)
+    }
+    fn generics_type_path(&self) -> Result<&syn::TypePath, String> {
+        let generic_type = &self.path.segments.last().unwrap().arguments;
+        if let syn::PathArguments::AngleBracketed(args) = generic_type {
+            if args.args.len() == 1 {
+                if let syn::GenericArgument::Type(ty) = args.args.first().unwrap() {
+                    if let syn::Type::Path(type_path) = ty {
+                        Ok(type_path)
+                    } else {
+                        Err("Unsupported type within Option.".to_owned())
+                    }
+                } else {
+                    Err("Invalid type.".to_owned())
+                }
+            } else {
+                Err("Unsupported number of generic arguments.".to_owned())
+            }
+        } else {
+            Err("Non-parameterized type.".to_owned())
+        }
+    }
 }
 
 #[derive(Default)]

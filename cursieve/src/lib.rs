@@ -35,7 +35,7 @@ pub trait SieveDisperse {
     fn sieve_size() -> usize;
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        let mut data = Vec::<u8>::with_capacity(Self::sieve_size());
+        let mut data: Vec<u8> = vec![0; Self::sieve_size()];
         let mut cursor = std::io::Cursor::new(&mut data[..]);
         self.disperse_cursor(&mut cursor)?;
         Ok(data)
