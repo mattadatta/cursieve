@@ -1,7 +1,7 @@
 extern crate proc_macro;
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{quote, ToTokens};
 use syn::{parenthesized, parse_macro_input};
 
 #[proc_macro_derive(Sieve, attributes(sieve))]
@@ -394,7 +394,7 @@ fn derive_op_function(global_sieve_attr: &SieveAttribute, sieve_attr: &SieveAttr
             if let Some(stride) = sieve_attr.stride {
                 stride
             } else {
-                let error = format!("`{}` Sieve type must be declared with `stride` attribute.", stringify!(type_path));
+                let error = format!("`{}` Sieve type must be declared with `stride` attribute.", type_path.into_token_stream().to_string());
                 return (0, quote!(), quote!(compile_error!(#error)))
             }
         }
